@@ -5,7 +5,10 @@ from models.question import Question
 from models.user import User
 from schemas.session import StartSessionRequest, SubmitAnswerRequest, AttemptResult, SessionOut
 from core.security import get_current_user
+from core.config import settings
 import random
+from groq import Groq
+import json as json_lib
 
 router = APIRouter(prefix="/api/mock", tags=["Mock Interview"])
 
@@ -25,32 +28,57 @@ def _session_out(s: MockSession) -> SessionOut:
     )
 
 
+
+
+
 def _score_answer(question: Question, user_answer: str) -> tuple[int, str]:
-    """
-    Simple heuristic scoring.
-    In production: replace with an LLM call (e.g. OpenAI / Gemini API).
-    """
-    answer_len = len(user_answer.strip().split())
-    keywords_in_question = set(question.title.lower().split()) | set(question.topic.lower().split())
-    answer_words = set(user_answer.lower().split())
-    overlap = len(keywords_in_question & answer_words)
+    try:
+        client = Groq(api_key=settings.groq_api_key)
 
-    if answer_len < 10:
-        score = random.randint(1, 3)
-        feedback = "Your answer is too brief. Try to elaborate with examples and key concepts."
-    elif overlap >= 3 and answer_len >= 50:
-        score = random.randint(7, 10)
-        feedback = "Great answer! You covered the key concepts well. "
-        if score < 10:
-            feedback += "Consider adding more specific examples to strengthen further."
-    elif answer_len >= 20:
-        score = random.randint(4, 7)
-        feedback = "Decent attempt. Try to include more topic-specific terminology and structured explanation."
-    else:
-        score = random.randint(2, 5)
-        feedback = "Needs more depth. Structure your answer with: definition → working → example → trade-offs."
+        prompt = f"""You are a strict but fair technical interviewer at a top tech company.
+Evaluate the candidate's answer below.
 
-    return score, feedback
+Question: {question.title}
+Topic: {question.topic}
+Difficulty: {question.difficulty}
+Question Type: {question.question_type}
+
+Candidate's Answer: {user_answer}
+
+Return ONLY a valid JSON object, nothing else, no markdown, no explanation:
+{{"score": 7, "feedback": "Your feedback here in 2-3 sentences."}}
+
+Score rules:
+- 9-10: Excellent, covers all key concepts with examples
+- 7-8: Good, covers most concepts  
+- 5-6: Average, missing some key points
+- 3-4: Below average, needs improvement
+- 1-2: Very poor or irrelevant answer"""
+
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a technical interviewer. Always respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        text = response.choices[0].message.content.strip()
+
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        text = text.strip()
+
+        result = json_lib.loads(text)
+        score = max(1, min(10, int(result["score"])))
+        feedback = result["feedback"]
+        return score, feedback
+
+    except Exception as e:
+        print(f"Groq error: {e}")
+        return 5, "Answer received. Could not process AI feedback at this time."
 
 
 @router.post("/start", response_model=SessionOut, status_code=201)

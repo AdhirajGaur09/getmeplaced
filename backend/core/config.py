@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
     cors_origins: str = "http://localhost:5173"
+    gemini_api_key: str = ""
+    groq_api_key: str = "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"
 
     class Config:
         env_file = ".env"
